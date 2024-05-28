@@ -7,6 +7,7 @@ from tqdm import tqdm
 import argparse
 import scipy
 import multiprocessing as mp
+import seaborn as sb
 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -18,8 +19,11 @@ parser = argparse.ArgumentParser(description='Training GCN on Cora/CiteSeer/PubM
 '''
     Dataset arguments
 '''
+parser.add_argument('--save_dir', type=str, default='results/debug')
 parser.add_argument('--dataset', type=str, default='reddit',
                     help='Dataset name: Cora/CiteSeer/PubMed/Reddit')
+parser.add_argument('--seed', type=int, default=256,
+                    help='Hidden state dimension')
 parser.add_argument('--nhid', type=int, default=256,
                     help='Hidden state dimension')
 parser.add_argument('--epoch_num', type=int, default= 100,
@@ -44,8 +48,9 @@ parser.add_argument('--cuda', type=int, default=0,
                     help='Avaiable GPU ID')
 
 
-
 args = parser.parse_args()
+print(f'Running with seed {args.seed}.')
+set_random_seed(args.seed)
 
 
 class GraphConvolution(nn.Module):
@@ -92,12 +97,11 @@ class SuGCN(nn.Module):
 
 
 
-def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+def fastgcn_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
         FastGCN_Sampler: Sample a fixed number of nodes per layer. The sampling probability (importance)
                          is pre-computed based on the global degree (lap_matrix)
     '''
-    np.random.seed(seed)
     previous_nodes = batch_nodes
     adjs  = []
     #     pre-compute the sampling probability (importance) based on the global degree (lap_matrix)
@@ -124,12 +128,11 @@ def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dep
     adjs.reverse()
     return adjs, previous_nodes, batch_nodes
 
-def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+def ladies_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
         LADIES_Sampler: Sample a fixed number of nodes per layer. The sampling probability (importance)
                          is computed adaptively according to the nodes sampled in the upper layer.
     '''
-    np.random.seed(seed)
     previous_nodes = batch_nodes
     adjs  = []
     '''
@@ -155,7 +158,7 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
     return adjs, previous_nodes, batch_nodes
-def default_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+def default_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     mx = sparse_mx_to_torch_sparse_tensor(lap_matrix)
     return [mx for i in range(depth)], np.arange(num_nodes), batch_nodes
 def prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_list, num_nodes, lap_matrix, depth):
@@ -163,11 +166,11 @@ def prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_
     for _ in process_ids:
         idx = torch.randperm(len(train_nodes))[:args.batch_size]
         batch_nodes = train_nodes[idx]
-        p = pool.apply_async(sampler, args=(np.random.randint(2**32 - 1), batch_nodes,                                                    samp_num_list, num_nodes, lap_matrix, depth))
+        p = pool.apply_async(sampler, args=(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth))
         jobs.append(p)
     idx = torch.randperm(len(valid_nodes))[:args.batch_size]
     batch_nodes = valid_nodes[idx]
-    p = pool.apply_async(sampler, args=(np.random.randint(2**32 - 1), batch_nodes,                                                samp_num_list * 20, num_nodes, lap_matrix, depth))
+    p = pool.apply_async(sampler, args=(batch_nodes, samp_num_list * 20, num_nodes, lap_matrix, depth))
     jobs.append(p)
     return jobs
 def package_mxl(mxl, device):
@@ -187,7 +190,7 @@ edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes = lo
 adj_matrix = get_adj(edges, feat_data.shape[0])
 
 lap_matrix = row_normalize(adj_matrix + sp.eye(adj_matrix.shape[0]))
-if type(feat_data) == scipy.sparse.lil.lil_matrix:
+if type(feat_data) == scipy.sparse.lil_matrix:
     feat_data = torch.FloatTensor(feat_data.todense()).to(device) 
 else:
     feat_data = torch.FloatTensor(feat_data).to(device)
@@ -201,10 +204,6 @@ elif args.sample_method == 'fastgcn':
     sampler = fastgcn_sampler
 elif args.sample_method == 'full':
     sampler = default_sampler
-
-
-# In[ ]:
-
 
 process_ids = np.arange(args.batch_num)
 samp_num_list = np.array([args.samp_num, args.samp_num, args.samp_num, args.samp_num, args.samp_num])
@@ -261,16 +260,16 @@ for oiter in range(5):
             output = output[output_nodes]
         loss_valid = F.cross_entropy(output, labels[output_nodes]).detach().tolist()
         valid_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
-        print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") %                   (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1))
+        print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1))
         if valid_f1 > best_val + 1e-2:
             best_val = valid_f1
-            torch.save(susage, './save/best_model.pt')
+            torch.save(susage, os.path.join(args.save_dir, 'best_model.pt'))
             cnt = 0
         else:
             cnt += 1
         if cnt == args.n_stops // args.batch_num:
             break
-    best_model = torch.load('./save/best_model.pt')
+    best_model = torch.load(os.path.join(args.save_dir, 'best_model.pt'))
     best_model.eval()
     test_f1s = []
     
@@ -279,8 +278,7 @@ for oiter in range(5):
     '''
     #     for b in np.arange(len(test_nodes) // args.batch_size):
     #         batch_nodes = test_nodes[b * args.batch_size : (b+1) * args.batch_size]
-    #         adjs, input_nodes, output_nodes = sampler(np.random.randint(2**32 - 1), batch_nodes,
-    #                                     samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
+    #         adjs, input_nodes, output_nodes = sampler(batch_nodes, samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
     #         adjs = package_mxl(adjs, device)
     #         output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
     #         test_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
@@ -290,8 +288,7 @@ for oiter in range(5):
     If using full-batch inference:
     '''
     batch_nodes = test_nodes
-    adjs, input_nodes, output_nodes = default_sampler(np.random.randint(2**32 - 1), batch_nodes,
-                                    samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
+    adjs, input_nodes, output_nodes = default_sampler(batch_nodes, samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
     adjs = package_mxl(adjs, device)
     output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
     test_f1s = [f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')]
@@ -302,8 +299,7 @@ for oiter in range(5):
     Visualize the train-test curve
 '''
 
-# dt = pd.DataFrame(all_res, columns=['f1-score', 'batch', 'type'])
-# sb.lineplot(data = dt, x='batch', y='f1-score', hue='type')
-# plt.legend(loc='lower right')
-# plt.show()
-
+dt = pd.DataFrame(all_res, columns=['f1-score', 'batch', 'type'])
+sb.lineplot(data = dt, x='batch', y='f1-score', hue='type')
+plt.legend(loc='lower right')
+plt.show()
