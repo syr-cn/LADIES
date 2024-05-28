@@ -7,4 +7,3 @@ scikit-learn
 scipy
 pandas
 matplotlib
-seaborn

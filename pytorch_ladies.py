@@ -3,11 +3,9 @@
 
 
 from utils import *
-from tqdm import tqdm
 import argparse
 import scipy
 import multiprocessing as mp
-import seaborn as sb
 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -298,8 +296,3 @@ for oiter in range(5):
 '''
     Visualize the train-test curve
 '''
-
-dt = pd.DataFrame(all_res, columns=['f1-score', 'batch', 'type'])
-sb.lineplot(data = dt, x='batch', y='f1-score', hue='type')
-plt.legend(loc='lower right')
-plt.show()
