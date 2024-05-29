@@ -6,6 +6,7 @@ from utils import *
 import argparse
 import scipy
 import multiprocessing as mp
+from model import *
 
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -18,82 +19,22 @@ parser = argparse.ArgumentParser(description='Training GCN on Cora/CiteSeer/PubM
     Dataset arguments
 '''
 parser.add_argument('--save_dir', type=str, default='results/debug')
-parser.add_argument('--dataset', type=str, default='reddit',
-                    help='Dataset name: Cora/CiteSeer/PubMed/Reddit')
-parser.add_argument('--seed', type=int, default=256,
-                    help='Hidden state dimension')
-parser.add_argument('--nhid', type=int, default=256,
-                    help='Hidden state dimension')
-parser.add_argument('--epoch_num', type=int, default= 100,
-                    help='Number of Epoch')
-parser.add_argument('--pool_num', type=int, default= 10,
-                    help='Number of Pool')
-parser.add_argument('--batch_num', type=int, default= 10,
-                    help='Maximum Batch Number')
-parser.add_argument('--batch_size', type=int, default=512,
-                    help='size of output node in a batch')
-parser.add_argument('--n_layers', type=int, default=5,
-                    help='Number of GCN layers')
-parser.add_argument('--n_iters', type=int, default=1,
-                    help='Number of iteration to run on a batch')
-parser.add_argument('--n_stops', type=int, default=200,
-                    help='Stop after number of batches that f1 dont increase')
-parser.add_argument('--samp_num', type=int, default=64,
-                    help='Number of sampled nodes per layer')
-parser.add_argument('--sample_method', type=str, default='ladies',
-                    help='Sampled Algorithms: ladies/fastgcn/full')
-parser.add_argument('--cuda', type=int, default=0,
-                    help='Avaiable GPU ID')
+parser.add_argument('--gnn_type', type=str, default='gcn')
+parser.add_argument('--dataset', type=str, default='cora', help='Dataset name: Cora/CiteSeer/PubMed/Reddit')
+parser.add_argument('--nhid', type=int, default=256, help='Hidden state dimension')
+parser.add_argument('--epoch_num', type=int, default= 100, help='Number of Epoch')
+parser.add_argument('--pool_num', type=int, default= 10, help='Number of Pool')
+parser.add_argument('--batch_num', type=int, default= 10, help='Maximum Batch Number')
+parser.add_argument('--batch_size', type=int, default=512, help='size of output node in a batch')
+parser.add_argument('--n_layers', type=int, default=5, help='Number of GCN layers')
+parser.add_argument('--n_iters', type=int, default=5, help='Number of iteration to run on a batch')
+parser.add_argument('--n_stops', type=int, default=200, help='Stop after number of batches that f1 dont increase')
+parser.add_argument('--samp_num', type=int, default=64, help='Number of sampled nodes per layer')
+parser.add_argument('--sample_method', type=str, default='subgraph', help='Sampled Algorithms: subgraph/fastgcn/full')
+parser.add_argument('--cuda', type=int, default=0, help='Avaiable GPU ID')
 
 
 args = parser.parse_args()
-print(f'Running with seed {args.seed}.')
-set_random_seed(args.seed)
-
-
-class GraphConvolution(nn.Module):
-    def __init__(self, n_in, n_out, bias=True):
-        super(GraphConvolution, self).__init__()
-        self.n_in  = n_in
-        self.n_out = n_out
-        self.linear = nn.Linear(n_in,  n_out)
-    def forward(self, x, adj):
-        out = self.linear(x)
-        return F.elu(torch.spmm(adj, out))
-
-
-class GCN(nn.Module):
-    def __init__(self, nfeat, nhid, layers, dropout):
-        super(GCN, self).__init__()
-        self.layers = layers
-        self.nhid = nhid
-        self.gcs = nn.ModuleList()
-        self.gcs.append(GraphConvolution(nfeat,  nhid))
-        self.dropout = nn.Dropout(dropout)
-        for i in range(layers-1):
-            self.gcs.append(GraphConvolution(nhid,  nhid))
-    def forward(self, x, adjs):
-        '''
-            The difference here with the original GCN implementation is that
-            we will receive different adjacency matrix for different layer.
-        '''
-        for idx in range(len(self.gcs)):
-            x = self.dropout(self.gcs[idx](x, adjs[idx]))
-        return x
-
-class SuGCN(nn.Module):
-    def __init__(self, encoder, num_classes, dropout, inp):
-        super(SuGCN, self).__init__()
-        self.encoder = encoder
-        self.dropout = nn.Dropout(dropout)
-        self.linear  = nn.Linear(self.encoder.nhid, num_classes)
-    def forward(self, feat, adjs):
-        x = self.encoder(feat, adjs)
-        x = self.dropout(x)
-        x = self.linear(x)
-        return x
-
-
 
 def fastgcn_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
@@ -126,9 +67,9 @@ def fastgcn_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     adjs.reverse()
     return adjs, previous_nodes, batch_nodes
 
-def ladies_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+def subgraph_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
-        LADIES_Sampler: Sample a fixed number of nodes per layer. The sampling probability (importance)
+        Sample a fixed number of nodes per layer. The sampling probability (importance)
                          is computed adaptively according to the nodes sampled in the upper layer.
     '''
     previous_nodes = batch_nodes
@@ -196,8 +137,8 @@ labels    = torch.LongTensor(labels).to(device)
 
 
 
-if args.sample_method == 'ladies':
-    sampler = ladies_sampler
+if args.sample_method == 'subgraph':
+    sampler = subgraph_sampler
 elif args.sample_method == 'fastgcn':
     sampler = fastgcn_sampler
 elif args.sample_method == 'full':
@@ -210,9 +151,13 @@ pool = mp.Pool(args.pool_num)
 jobs = prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
 
 all_res = []
-for oiter in range(5):
-    encoder = GCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
-    susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
+all_test_f1s = []
+for oiter in range(args.n_iters):
+    seed = np.random.randint(2**32 - 1)
+    print(f'Running with seed {seed}.')
+    set_random_seed(args.seed)
+    encoder = GNN(gnn_type = args.gnn_type, nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
+    susage  = SuGNN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
     susage.to(device)
 
     optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
@@ -291,8 +236,10 @@ for oiter in range(5):
     output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
     test_f1s = [f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')]
     
-    print('Iteration: %d, Test F1: %.3f' % (oiter, np.average(test_f1s)))
+    print(f'Seed {seed} Iteration: {oiter:d}, Test F1: {np.average(test_f1s):.3f}')
+    all_test_f1s.append(np.average(test_f1s))
 
-'''
-    Visualize the train-test curve
-'''
+avg, std = np.average(all_test_f1s), np.std(all_test_f1s)
+print('-' * 100)
+print(f'Average: {avg:.5f}')
+print(f'Std: {std:.5f}')
