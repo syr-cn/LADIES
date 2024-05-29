@@ -38,7 +38,7 @@ args = parser.parse_args()
 
 def fastgcn_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
-        FastGCN_Sampler: Sample a fixed number of nodes per layer. The sampling probability (importance)
+        Sample a fixed number of nodes per layer. The sampling probability (importance)
                          is pre-computed based on the global degree (lap_matrix)
     '''
     previous_nodes = batch_nodes
@@ -57,7 +57,7 @@ def fastgcn_sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
         after_nodes = np.random.choice(num_nodes, s_num, p = p, replace = False)
         #     col-select the lap_matrix (U), and then devided by the sampled probability for 
         #     unbiased-sampling. Finally, conduct row-normalization to avoid value explosion.         
-        adj = row_norm(U[: , after_nodes].multiply(1/p[after_nodes]))
+        adj = row_normalize(U[: , after_nodes].multiply(1/p[after_nodes]))
         #     Turn the sampled adjacency matrix into a sparse matrix. If implemented by PyG
         #     This sparse matrix can also provide index and value.
         adjs += [sparse_mx_to_torch_sparse_tensor(row_normalize(adj))]
@@ -150,17 +150,17 @@ samp_num_list = np.array([args.samp_num, args.samp_num, args.samp_num, args.samp
 pool = mp.Pool(args.pool_num)
 jobs = prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
 
-all_res = []
+all_times = []
 all_test_f1s = []
 for oiter in range(args.n_iters):
     seed = np.random.randint(2**32 - 1)
     print(f'Running with seed {seed}.')
     set_random_seed(seed)
     encoder = GNN(gnn_type = args.gnn_type, nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
-    susage  = SuGNN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
-    susage.to(device)
+    model  = GNNCls(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
+    model.to(device)
 
-    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
+    optimizer = optim.Adam(filter(lambda p : p.requires_grad, model.parameters()))
     best_val = 0
     best_tst = -1
     cnt = 0
@@ -168,7 +168,7 @@ for oiter in range(args.n_iters):
     res   = []
     print('-' * 10)
     for epoch in np.arange(args.epoch_num):
-        susage.train()
+        model.train()
         train_losses = []
         train_data = [job.get() for job in jobs[:-1]]
         valid_data = jobs[-1].get()
@@ -183,22 +183,22 @@ for oiter in range(args.n_iters):
             for adjs, input_nodes, output_nodes in train_data:    
                 adjs = package_mxl(adjs, device)
                 optimizer.zero_grad()
+                model.train()
                 t1 = time.time()
-                susage.train()
-                output = susage.forward(feat_data[input_nodes], adjs)
+                output = model.forward(feat_data[input_nodes], adjs)
                 if args.sample_method == 'full':
                     output = output[output_nodes]
                 loss_train = F.cross_entropy(output, labels[output_nodes])
                 loss_train.backward()
-                torch.nn.utils.clip_grad_norm_(susage.parameters(), 0.2)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
                 optimizer.step()
                 times += [time.time() - t1]
                 train_losses += [loss_train.detach().tolist()]
                 del loss_train
-        susage.eval()
+        model.eval()
         adjs, input_nodes, output_nodes = valid_data
         adjs = package_mxl(adjs, device)
-        output = susage.forward(feat_data[input_nodes], adjs)
+        output = model.forward(feat_data[input_nodes], adjs)
         if args.sample_method == 'full':
             output = output[output_nodes]
         loss_valid = F.cross_entropy(output, labels[output_nodes]).detach().tolist()
@@ -206,7 +206,7 @@ for oiter in range(args.n_iters):
         print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1))
         if valid_f1 > best_val + 1e-2:
             best_val = valid_f1
-            torch.save(susage, os.path.join(args.save_dir, 'best_model.pt'))
+            torch.save(model, os.path.join(args.save_dir, 'best_model.pt'))
             cnt = 0
         else:
             cnt += 1
@@ -224,8 +224,20 @@ for oiter in range(args.n_iters):
     
     print(f'Seed {seed} Iteration: {oiter:d}, Test F1: {np.average(test_f1s):.3f}')
     all_test_f1s.append(np.average(test_f1s))
+    all_times.append(np.sum(times)/epoch)
 
 avg, std = np.average(all_test_f1s), np.std(all_test_f1s)
 print('-' * 100)
-print(f'Average: {avg:.5f}')
-print(f'Std: {std:.5f}')
+print(f'F1 Score: {avg*100:.1f}±{std*100:.1f}')
+print(f'F1 Score Average: {avg:.5f}')
+print(f'F1 Score Std: {std:.5f}')
+time_avg, time_std = np.average(all_times), np.std(all_times)
+print('')
+print(f'Time/Epoch: {time_avg:.2f}±{time_std:.2f}')
+print(f'Time/Epoch Average: {time_avg:.5f}')
+print(f'Time/Epoch Std: {time_std:.5f}')
+batch_time_avg, batch_time_std = np.average(times), np.std(times)
+print('')
+print(f'Time/Batch: {batch_time_avg:.2f}±{batch_time_std:.2f}')
+print(f'Time/Batch Average: {batch_time_avg:.5f}')
+print(f'Time/Batch Std: {batch_time_std:.5f}')

@@ -12,13 +12,14 @@ class GCNConv(nn.Module):
 
 class GINConv(nn.Module):
     def __init__(self, n_in, n_out, bias=True):
+        raise NotImplementedError
         super(GINConv, self).__init__()
         self.linear = nn.Linear(n_in, n_out, bias=bias)
         self.eps = nn.Parameter(torch.Tensor([0]))
 
     def forward(self, x, adj):
         out = torch.spmm(adj, x)
-        out = (1 + self.eps) * x + out
+        # out = (1 + self.eps) * x + out
         out = self.linear(out)
         return F.relu(out)
 
@@ -41,9 +42,9 @@ class GNN(nn.Module):
             x = self.dropout(self.gcs[idx](x, adjs[idx]))
         return x
 
-class SuGNN(nn.Module):
+class GNNCls(nn.Module):
     def __init__(self, encoder, num_classes, dropout, inp):
-        super(SuGNN, self).__init__()
+        super(GNNCls, self).__init__()
         self.encoder = encoder
         self.dropout = nn.Dropout(dropout)
         self.linear  = nn.Linear(self.encoder.nhid, num_classes)
