@@ -6,9 +6,10 @@ class GCNConv(nn.Module):
         self.n_in  = n_in
         self.n_out = n_out
         self.linear = nn.Linear(n_in,  n_out)
+        self.act = nn.LeakyReLU(0.2)
     def forward(self, x, adj):
         out = self.linear(x)
-        return F.elu(torch.spmm(adj, out))
+        return self.act(torch.spmm(adj, out))
 
 class GINConv(nn.Module):
     def __init__(self, n_in, n_out, bias=True):
