@@ -224,7 +224,7 @@ for oiter in range(args.n_iters):
     
     print(f'Seed {seed} Iteration: {oiter:d}, Test F1: {np.average(test_f1s):.3f}')
     all_test_f1s.append(np.average(test_f1s))
-    all_times.append(np.sum(times)/epoch)
+    all_times.append(np.sum(times)/(epoch+1))
 
 avg, std = np.average(all_test_f1s), np.std(all_test_f1s)
 print('-' * 100)
