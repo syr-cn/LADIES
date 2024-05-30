@@ -27,7 +27,8 @@ parser.add_argument('--pool_num', type=int, default= 10, help='Number of Pool')
 parser.add_argument('--batch_num', type=int, default= 10, help='Maximum Batch Number')
 parser.add_argument('--batch_size', type=int, default=512, help='size of output node in a batch')
 parser.add_argument('--n_layers', type=int, default=5, help='Number of GCN layers')
-parser.add_argument('--n_iters', type=int, default=5, help='Number of iteration to run on a batch')
+parser.add_argument('--num_seeds', type=int, default=5, help='Number of seeds to run')
+parser.add_argument('--n_iters', type=int, default=1, help='Number of iteration to run on a batch')
 parser.add_argument('--n_stops', type=int, default=200, help='Stop after number of batches that f1 dont increase')
 parser.add_argument('--samp_num', type=int, default=64, help='Number of sampled nodes per layer')
 parser.add_argument('--sample_method', type=str, default='subgraph', help='Sampled Algorithms: subgraph/fastgcn/full')
@@ -152,7 +153,7 @@ jobs = prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_n
 
 all_times = []
 all_test_f1s = []
-for oiter in range(args.n_iters):
+for oiter in range(args.num_seeds):
     seed = np.random.randint(2**32 - 1)
     print(f'Running with seed {seed}.')
     set_random_seed(seed)
