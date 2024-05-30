@@ -113,6 +113,19 @@ def prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_
     p = pool.apply_async(sampler, args=(batch_nodes, samp_num_list * 20, num_nodes, lap_matrix, depth))
     jobs.append(p)
     return jobs
+def prepare_data_nonpool(sampler, process_ids, train_nodes, valid_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+    samples = []
+    for _ in process_ids:
+        idx = torch.randperm(len(train_nodes))[:args.batch_size]
+        batch_nodes = train_nodes[idx]
+        sample = sampler(batch_nodes, samp_num_list, num_nodes, lap_matrix, depth)
+        samples.append(sample)
+    idx = torch.randperm(len(valid_nodes))[:args.batch_size]
+    batch_nodes = valid_nodes[idx]
+    sample = sampler(batch_nodes, samp_num_list * 20, num_nodes, lap_matrix, depth)
+    samples.append(sample)
+    return samples
+
 def package_mxl(mxl, device):
     return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
 
@@ -148,9 +161,6 @@ elif args.sample_method == 'full':
 process_ids = np.arange(args.batch_num)
 samp_num_list = np.array([args.samp_num, args.samp_num, args.samp_num, args.samp_num, args.samp_num])
 
-pool = mp.Pool(args.pool_num)
-jobs = prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
-
 all_times = []
 all_test_f1s = []
 for oiter in range(args.num_seeds):
@@ -171,15 +181,9 @@ for oiter in range(args.num_seeds):
     for epoch in np.arange(args.epoch_num):
         model.train()
         train_losses = []
-        train_data = [job.get() for job in jobs[:-1]]
-        valid_data = jobs[-1].get()
-        pool.close()
-        pool.join()
-        pool = mp.Pool(args.pool_num)
-        '''
-            Use CPU-GPU cooperation to reduce the overhead for sampling. (conduct sampling while training)
-        '''
-        jobs = prepare_data(pool, sampler, process_ids, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+        samples = prepare_data_nonpool(sampler, process_ids, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+        train_data = samples[:-1]
+        valid_data = samples[-1]
         for _iter in range(args.n_iters):
             for adjs, input_nodes, output_nodes in train_data:    
                 adjs = package_mxl(adjs, device)
