@@ -201,14 +201,15 @@ for oiter in range(args.num_seeds):
                 train_losses += [loss_train.detach().tolist()]
                 del loss_train
         model.eval()
-        adjs, input_nodes, output_nodes = valid_data
-        adjs = package_mxl(adjs, device)
-        output = model.forward(feat_data[input_nodes], adjs)
-        if args.sample_method == 'full':
-            output = output[output_nodes]
-        loss_valid = F.cross_entropy(output, labels[output_nodes]).detach().tolist()
-        valid_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
-        print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1))
+        with torch.no_grad():
+            adjs, input_nodes, output_nodes = valid_data
+            adjs = package_mxl(adjs, device)
+            output = model.forward(feat_data[input_nodes], adjs)
+            if args.sample_method == 'full':
+                output = output[output_nodes]
+            loss_valid = F.cross_entropy(output, labels[output_nodes]).detach().tolist()
+            valid_f1 = f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')
+        print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1), flush=True)
         if valid_f1 > best_val + 1e-2:
             best_val = valid_f1
             torch.save(model, os.path.join(args.save_dir, 'best_model.pt'))
@@ -227,7 +228,7 @@ for oiter in range(args.num_seeds):
     output = best_model.forward(feat_data[input_nodes], adjs)[output_nodes]
     test_f1s = [f1_score(output.argmax(dim=1).cpu(), labels[output_nodes].cpu(), average='micro')]
     
-    print(f'Seed {seed} Iteration: {oiter:d}, Test F1: {np.average(test_f1s):.3f}')
+    print(f'Seed {seed} Iteration: {oiter:d}, Test F1: {np.average(test_f1s):.3f}', flush=True)
     all_test_f1s.append(np.average(test_f1s))
     all_times.append(np.sum(times)/(epoch+1))
 
